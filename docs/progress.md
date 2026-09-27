@@ -3,9 +3,12 @@
 > **Purpose.** A cold-start handoff document. A fresh session should be able to read
 > only this file and continue without re-discovering anything.
 >
-> **Last updated:** session 2 — partner logos recovered from the legacy site and
-> wired in. Site is **complete and verified**; remaining items are content/brand
-> decisions, not code.
+> **Last updated:** session 4 — fixed the Vercel/Linux build failure and added CI.
+> Site is **complete and verified**; remaining items are content/brand decisions,
+> not code.
+>
+> **Project root note:** the app was un-nested from `aglobal-care-web/` to the
+> repository root (`E:\code\Aglobal`). Paths below are root-relative.
 
 ---
 
@@ -16,16 +19,17 @@
 | Source | `https://www.aglobalcare.com/` (also `about.html`) |
 | Legacy stack (inferred) | Next.js hash-style bundle + Squarespace-hosted `about.html`; single index page with `#` anchors, `<video>` hero, 40+ large JPEG/PNG assets |
 | New stack | **Next.js 15.5.26** (App Router, React 19) · TypeScript strict · Tailwind CSS v4 · static export |
-| Project root | `E:\code\Aglobal\aglobal-care-web` |
-| Build output | `E:\code\Aglobal\aglobal-care-web\out` (static, CDN-ready) |
-| Verified | ✅ `tsc --noEmit` · ✅ `eslint .` · ✅ `next build` (8/8 static pages) · ✅ browser-checked at 390 / 768 / 1440 px |
+| Project root | `E:\code\Aglobal` (repository root) |
+| Build output | `E:\code\Aglobal\out` (static, CDN-ready) |
+| CI | `.github/workflows/ci.yml` — pins the failure modes below |
+| Verified | ✅ `tsc --noEmit` · ✅ `eslint .` · ✅ `next build` (8/8 static pages) · ✅ browser-checked at 390 / 768 / 1440 px · ✅ CI guard unit-tested |
 | Open blockers | None technical. 4 content decisions pending (see §7) |
 
 ### Commands
 
 ```bash
-cd E:\code\Aglobal\aglobal-care-web
-npm install
+cd E:\code\Aglobal
+npm ci                 # exactly what CI and Vercel install
 npm run dev            # http://localhost:3000
 npm run verify         # typecheck + lint + build  ← use this before every handoff
 ```
@@ -57,24 +61,27 @@ npm run verify         # typecheck + lint + build  ← use this before every han
 ## 3. Architecture
 
 ```
-aglobal-care-web/
+.                          (repository root = project root)
+├─ .github/workflows/ci.yml
+├─ docs/progress.md        ← this file
 ├─ src/app/
 │  ├─ layout.tsx        fonts, metadata, header/footer, skip link, JSON-LD
 │  ├─ page.tsx          composes the 9 sections
-│  ├─ globals.css       @theme design tokens + base layer + 3 custom utilities
+│  ├─ globals.css       @theme design tokens + base layer + plain-CSS utilities
+│  │                    (.rail-marquee, .field-select — see §6 session 4)
 │  ├─ not-found.tsx  sitemap.ts  robots.ts  manifest.ts
 ├─ src/components/
 │  ├─ layout/           site-header · mobile-nav · site-footer
 │  ├─ sections/         hero · impact · business-model · products · solutions
 │  │                    solution-tabs · partners · about (+ Team) · contact · contact-form
-│  └─ ui/               button · icon · logo · section-heading · layout(Container/Section)
+│  └─ ui/               button · icon · logo · optimized-image · section-heading · layout
 ├─ src/lib/
 │  ├─ content.ts        ← ALL marketing copy (single source of truth)
 │  ├─ site-config.ts    identity, contact, navigation, absoluteUrl()
 │  ├─ types.ts          Highlight · ProductCategory · SolutionGroup · Stat · …
 │  ├─ structured-data.ts  schema.org Organization + WebSite
 │  └─ cn.ts             dependency-free class-name composer
-└─ public/              logo.png · icon.svg · chevron-down.svg
+└─ public/              logo.png · icon.svg · partners/*.png · team/*.webp
 ```
 
 ### Key decisions and their rationale
@@ -302,6 +309,68 @@ Each `currentSrc` resolved to the 640w candidate and every `alt` is of the form
 `"Portrait of <name>, <role>"`. Crop framing was reviewed on a contact sheet
 before wiring in, so the composition is deliberate rather than incidental.
 
+### Session 4 — Vercel build failure (the important one)
+
+**Symptom.** Local `npm run build` passed; Vercel failed with:
+
+```
+Module not found: Error: Cannot find module './&'
+Import trace for requested module: ./src/app/globals.css
+```
+
+**Root cause.** The select indicator was styled with a Tailwind arbitrary
+`background-image` utility whose value was a quoted, slash-prefixed asset path
+(the chevron SVG in `public/`). That compiled to a CSS rule of the shape
+`background-image:url(/chevron-down.svg)`.
+
+Next.js pipes the compiled stylesheet through webpack's **css-loader**, which
+treats *every* `url()` as a **module request**. A quoted, slash-prefixed path
+turns into a bogus module id built from the leftover quote characters and the
+`&` separator — hence `Cannot find module './&'`. It survived on Windows and
+broke on the Linux builder.
+
+The decisive clue was in the deploy log itself:
+
+```
+hash: "#x27;/chevron-down.svg&"
+```
+
+`#x27` is `'`. css-loader was consuming the quotes as part of the request.
+
+**Fix.** Removed the arbitrary value entirely. The chevron is now an inlined
+`data:image/svg+xml,...` URI in plain CSS (`.field-select` in
+`src/app/globals.css`). A data URI is inert — css-loader has nothing to resolve.
+`public/chevron-down.svg` was deleted and is no longer referenced.
+
+This is the same class of failure as the known Next.js
+[css-loader `url()` regression](https://github.com/vercel/next.js/issues/30895).
+Do not reintroduce a background `url()` inside a utility class.
+
+**Also hardened:**
+
+- **Pinned every dependency to an exact version** (Tailwind and TypeScript were on
+  `^4` / `^5`; installed Tailwind was already 4.3.3). Range drift is precisely how
+  a green local build becomes a red deploy.
+- **Added `.github/workflows/ci.yml`** (see §9). Note `npm ci` is used, never
+  `npm install`, so CI resolves the same tree as Vercel.
+- **Added a CI guard on compiled CSS.** Allowlist-based: every `url()` in
+  `out/_next/static/css/*.css` must be a `data:` URI, a `/_next/` artifact, or a
+  `#fragment`. Anything else fails the build. The guard was itself verified to
+  pass the clean build *and* to fail a synthetic stylesheet containing the exact
+  original signature — an unverified guard is worse than none.
+
+**Post-fix verification:**
+
+```
+field-select: appearance=none, background-image=url("data:image/svg+xml,...")
+chevron data URI: decoded 150x150          ← actually paintable, not just present
+partner rail: animation=marquee-x, 28/28 loaded
+horizontal overflow: 0px | network/page errors: none
+ALL CHECKS PASSED
+
+GUARD VERIFIED: passes a clean build, blocks the reported failure.
+```
+
 ---
 
 ## 7. Open items (business decisions, not code)
@@ -356,8 +425,11 @@ Removed after use — nothing left behind:
 | --- | --- |
 | `E:\code\Aglobal\site.html` | 3-byte pre-existing stub in the workspace root |
 | `E:\code\Aglobal\.tmp-assets\` | Downloaded legacy images used to read baked-in text |
-| `E:\code\Aglobal\.tmp-tools\` | Playwright install + screenshot/verification scripts |
-| `aglobal-care-web/public/{next,vercel,file,globe,window}.svg` | create-next-app template SVGs |
+| `E:\code\Aglobal\.tmp-logos\` | Partner logo sources + transparency conversion scripts |
+| `E:\code\Aglobal\.tmp-team\` | Team portrait sources + sharp encode/contact-sheet scripts |
+| `E:\code\Aglobal\.tmp-verify\`, `.tmp-tools\` | Playwright installs + verification scripts |
+| `public/{next,vercel,file,globe,window}.svg` | create-next-app template SVGs |
+| `public/chevron-down.svg` | Replaced by an inlined data URI (§6, session 4) |
 
 The exported `out/` directory is intentionally kept (it is the deployable artifact)
 and is already covered by `.gitignore`.
@@ -367,16 +439,19 @@ and is already covered by `.gitignore`.
 ## 9. How to resume in a fresh session
 
 ```bash
-cd E:\code\Aglobal\aglobal-care-web
+cd E:\code\Aglobal
 npm ci && npm run verify          # confirm the baseline is green
 npm run dev                       # then work section by section
 ```
+
+CI (`.github/workflows/ci.yml`) runs typecheck → lint → build → CSS `url()` guard →
+export-asset check on every push. If CI is green, the Vercel build will be too.
 
 Suggested order of attack:
 
 1. Confirm the four unattributed partner marks (§7.1) — highest risk if shipped.
 2. Configure `NEXT_PUBLIC_CONTACT_ENDPOINT` (§7.2).
-3. Request the SVG logo (§7.4) and real headshots (§7.3).
+3. Sign off the portrait crops (§7.3) and request the SVG logo (§7.4).
 4. Run Lighthouse and record scores (§7.8).
 
 **Conventions to preserve:**
@@ -387,6 +462,10 @@ Suggested order of attack:
   interactivity, and keep the island as small as possible.
 - For images use `OptimizedImage` (`src/components/ui/optimized-image.tsx`), not
   `next/image` — and `loading="eager"` for anything inside an animated container.
+- **Never put a background asset `url()` in a Tailwind utility class.** Declare it
+  in `globals.css` and inline it as a data URI. This broke the Vercel build once
+  (§6, session 4); CI now blocks it.
+- Keep dependency versions exact; don't reintroduce `^` ranges.
 - Mobile-first: base classes target small screens; `sm:`/`lg:` only add.
 - Don't rely on `group-hover:` for functionality; Tailwind gates it behind
   `(hover: hover)`. Pair it with focus, or use plain CSS.

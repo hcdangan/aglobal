@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # Lets you re-run the exact same checks from the Actions tab.
+  workflow_dispatch:
+
+# A newer push to the same ref cancels the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, lint & build
+    runs-on: ubuntu-latest
+
+    env:
+      # Reproduces the production build target. `NEXT_TELEMETRY_DISABLED` keeps
+      # CI logs clean.
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_SITE_URL: https://www.aglobalcare.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `npm ci` installs strictly from package-lock.json, so CI resolves the
+      # same dependency tree as Vercel. Never use `npm install` here: it can
+      # silently resolve newer ranges, which is exactly how a green local build
+      # turns into a red deploy.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      # Guards the failure mode that broke the first Vercel deploy: a Tailwind
+      # arbitrary value compiled into `url(/some-asset.svg)` in the stylesheet,
+      # which webpack's css-loader then tried to resolve as a *module* and failed
+      # with "Cannot find module './&'".
+      #
+      # Allowlist rather than pattern-match, because the safe cases are bounded:
+      #   - `data:` URIs are inert (css-loader has nothing to resolve)
+      #   - `/_next/...` paths are build artifacts Next.js emitted itself
+      #   - `#fragment` references have no file to resolve
+      # Anything else is a reference to a file in this repo, which css-loader
+      # will try to resolve — and that is the bug.
+      #
+      # NOTE: Tailwind v4 scans raw source text (including comments and markdown)
+      # for class-shaped strings. Writing the offending utility verbatim in a
+      # comment or doc WILL regenerate it. This step exists because that happened
+      # once: the fix was right, but its explanatory comment kept re-creating the
+      # bug. Describe such patterns in prose.
+      - name: Guard against url() asset references in compiled CSS
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(out/_next/static/css/*.css)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No CSS emitted to out/_next/static/css — the export did not run."
+            exit 1
+          fi
+
+          bad=$(grep -oE "url\(([^)]*)\)" "${files[@]}" \
+            | grep -vE "url\((['\"]?)data:" \
+            | grep -vE "url\((['\"]?)/_next/" \
+            | grep -vE "url\((['\"]?)#" \
+            || true)
+
+          if [ -n "$bad" ]; then
+            echo "::error::Compiled CSS references a repo asset via url(). Inline it as a data URI in plain CSS instead of a Tailwind arbitrary value, or css-loader will fail to resolve it on Linux."
+            echo "Offending references:"
+            echo "$bad" | sort -u
+            exit 1
+          fi
+          echo "OK: every url() in the compiled CSS is a data URI, a /_next artifact, or a fragment."
+
+      # The export must actually contain the pages and assets Vercel will serve.
+      - name: Check export output
+        run: |
+          set -euo pipefail
+          test -f out/index.html || { echo "::error::out/index.html is missing"; exit 1; }
+          test -f out/robots.txt || { echo "::error::out/robots.txt is missing"; exit 1; }
+          test -f out/sitemap.xml || { echo "::error::out/sitemap.xml is missing"; exit 1; }
+          test -f out/logo.png || { echo "::error::out/logo.png is missing"; exit 1; }
+          echo "Export OK: $(find out -type f | wc -l) files."

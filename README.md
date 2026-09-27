@@ -1,7 +1,11 @@
 # AGlobal Care, Inc. — Website
 
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 Modern rebuild of [aglobalcare.com](https://www.aglobalcare.com/): a fast, accessible,
 mobile-first marketing site for AGlobal Care, Inc. — *"Changing human life globally."*
+
+> Replace `OWNER/REPO` in the badge URL above with the real GitHub path.
 
 ## Stack
 
@@ -34,7 +38,10 @@ Requires Node.js **20.9+**.
 ## Deployment
 
 `npm run build` writes a complete static site to `out/`. Point any static host at
-that directory. Two values are worth setting in the host's environment:
+that directory. Vercel builds this correctly with no extra configuration — it
+detects Next.js and runs `npm run build`.
+
+Two values are worth setting in the host's environment:
 
 - `NEXT_PUBLIC_SITE_URL` — canonical origin, used for canonical URLs, Open Graph,
   `sitemap.xml`, `robots.txt` and JSON-LD.
@@ -42,6 +49,44 @@ that directory. Two values are worth setting in the host's environment:
   form gracefully falls back to opening a prefilled email draft.
 
 See [`.env.example`](./.env.example).
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+1. `npm ci` — installs strictly from `package-lock.json`, so CI resolves the same
+   dependency tree as Vercel.
+2. `npm run typecheck`
+3. `npm run lint`
+4. `npm run build` — the full static export, on Linux, which is where
+   platform-specific build failures actually surface.
+5. A guard that scans the compiled CSS for `url()` references to repo assets.
+6. A check that the export contains the pages and assets Vercel will serve.
+
+> **Keep dependencies pinned to exact versions.** Tailwind and TypeScript use
+> ranges like `^4` / `^5`, which let a local green build turn into a red deploy.
+> If you upgrade, do it deliberately and let CI re-verify.
+
+## Troubleshooting
+
+### `Cannot find module './&'` during a Vercel / Linux build
+
+Next.js pipes the compiled stylesheet through webpack's `css-loader`, which treats
+**every** `url()` in the CSS as a *module request*. If a Tailwind arbitrary value
+compiles to a quoted, slash-prefixed asset path, css-loader tries to resolve that
+as a module and fails on Linux. It may still pass on Windows.
+
+**Fix:** never put a background asset `url()` in a Tailwind utility class. Declare
+it in `src/app/globals.css` in plain CSS, and inline the asset as a
+`data:image/svg+xml,...` URI so there is nothing to resolve. See `.field-select`
+in `globals.css` for the working pattern. The CI guard above fails the build if
+this regresses.
+
+> **Do not write the broken class verbatim in a comment, doc, or README.**
+> Tailwind v4 scans raw source text for class-shaped strings and will compile one
+> it finds *inside a comment* — re-introducing the exact bug. This happened once
+> already: the fix was correct, but the explanatory comment next to it kept
+> regenerating the offending CSS rule. Describe the pattern in prose.
 
 ## Project structure
 

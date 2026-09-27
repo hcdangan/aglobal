@@ -146,10 +146,7 @@ export function ContactForm() {
           name="enquiryType"
           required
           defaultValue=""
-          className={cn(
-            fieldClass,
-            "mt-2 appearance-none bg-[url('/chevron-down.svg')] bg-[length:1.25rem_1.25rem] bg-[position:right_0.875rem_center] bg-no-repeat pr-11",
-          )}
+          className={cn(fieldClass, "field-select mt-2")}
         >
           <option value="" disabled>
             Select an option
