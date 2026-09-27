@@ -33,7 +33,8 @@ npm run build        # static site emitted to ./out
 npm run start        # preview the exported build (serves ./out)
 ```
 
-Requires Node.js **20.9+**.
+Requires Node.js **22.13+** (see `.nvmrc` and `engines` in `package.json`). Node 24
+is also supported and is what CI-equivalent local runs use.
 
 ## Deployment
 
@@ -87,6 +88,49 @@ this regresses.
 > it finds *inside a comment* — re-introducing the exact bug. This happened once
 > already: the fix was correct, but the explanatory comment next to it kept
 > regenerating the offending CSS rule. Describe the pattern in prose.
+
+### `npm warn deprecated eslint@9.39.5` on install
+
+**Expected, and not currently fixable.** ESLint 9 is end-of-life, but ESLint 10
+cannot be adopted yet for two independent reasons:
+
+1. **`eslint-plugin-react` has no ESLint 10 support.** Its newest release (7.37.5
+   — also the copy bundled inside `eslint-config-next`) declares
+   `eslint: "^3 || … || ^9.7"` and calls `context.getFilename()`, which ESLint 10
+   removed. Every file fails with `getFilename is not a function`.
+2. **`FlatCompat` is removed in ESLint 10**, so the eslintrc-style
+   `next/core-web-vitals` shareable config can no longer be loaded through it.
+
+Because both blockers are upstream, the warning is cosmetic: linting runs
+correctly on 9.39.5 and CI is green. The upgrade path and exact steps are recorded
+in the header comment of `eslint.config.mjs`. Revisit when `eslint-plugin-react`
+publishes ESLint 10 support.
+
+### `npm audit` reports a PostCSS advisory via Next.js
+
+`npm audit` flags `postcss <= 8.5.22`, reached through the copy of PostCSS that
+**Next.js vendors internally**. `npm audit fix --force` would resolve it only by
+jumping to Next.js 16 — a major upgrade that is out of scope here. The practical
+exposure is negligible for this project:
+
+- all input CSS is first-party (our own `globals.css` and Tailwind output);
+- it is a **build-time** dependency, and the deployed artifact is a static export
+  with no Node server and no runtime PostCSS;
+- the advisories concern XSS via CSS stringification and `sourceMappingURL`
+  path traversal — neither reachable through a static export.
+
+Track it and upgrade Next.js deliberately when 16 is adopted.
+
+## Node version policy
+
+`engines.node` is bounded (`>=22.13.0 <25`) rather than open-ended (`>=20.9.0`)
+or a floating major (`22.x`). That keeps three things true at once:
+
+- Vercel does not warn about auto-upgrading to an untested future major;
+- the local toolchain is not blocked (Node 24 also satisfies the range);
+- `.nvmrc` pins the exact floor (`22.13.0`) so CI is reproducible.
+
+If you change the range, update `.nvmrc` to match and re-run `npm run verify`.
 
 ## Project structure
 

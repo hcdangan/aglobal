@@ -3,9 +3,8 @@
 > **Purpose.** A cold-start handoff document. A fresh session should be able to read
 > only this file and continue without re-discovering anything.
 >
-> **Last updated:** session 4 — fixed the Vercel/Linux build failure and added CI.
-> Site is **complete and verified**; remaining items are content/brand decisions,
-> not code.
+> **Last updated:** session 5 — resolved both Vercel install warnings. Site is
+> **complete and verified**; remaining items are content/brand decisions, not code.
 >
 > **Project root note:** the app was un-nested from `aglobal-care-web/` to the
 > repository root (`E:\code\Aglobal`). Paths below are root-relative.
@@ -19,9 +18,11 @@
 | Source | `https://www.aglobalcare.com/` (also `about.html`) |
 | Legacy stack (inferred) | Next.js hash-style bundle + Squarespace-hosted `about.html`; single index page with `#` anchors, `<video>` hero, 40+ large JPEG/PNG assets |
 | New stack | **Next.js 15.5.26** (App Router, React 19) · TypeScript strict · Tailwind CSS v4 · static export |
+| Node | `engines: ">=22.13.0 <25"`, `.nvmrc` = `22.13.0` (bounded on purpose — see §6, session 5) |
 | Project root | `E:\code\Aglobal` (repository root) |
 | Build output | `E:\code\Aglobal\out` (static, CDN-ready) |
 | CI | `.github/workflows/ci.yml` — pins the failure modes below |
+| Known acceptable warnings | `npm warn deprecated eslint@9.39.5`, `npm audit` PostCSS-via-Next advisory — both upstream-blocked, see §6 session 5 |
 | Verified | ✅ `tsc --noEmit` · ✅ `eslint .` · ✅ `next build` (8/8 static pages) · ✅ browser-checked at 390 / 768 / 1440 px · ✅ CI guard unit-tested |
 | Open blockers | None technical. 4 content decisions pending (see §7) |
 
@@ -369,6 +370,88 @@ horizontal overflow: 0px | network/page errors: none
 ALL CHECKS PASSED
 
 GUARD VERIFIED: passes a clean build, blocks the reported failure.
+```
+
+### Session 5 — Vercel install warnings
+
+Two warnings reported from the Vercel build log.
+
+**1. `engines.node: ">=20.9.0"` is an open-ended range.** Vercel warns because it
+would silently auto-upgrade to an untested future major.
+
+First attempt — `"node": "22.x"` — **introduced a new warning**:
+
+```
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'aglobal-care-web@1.0.0',
+npm warn EBADENGINE   required: { node: '22.x' },
+npm warn EBADENGINE   current: { node: 'v24.18.0', npm: '12.0.2' },
+```
+
+A floating major locks out a working local toolchain. Final value:
+
+```json
+"engines": { "node": ">=22.13.0 <25" }
+```
+
+with `.nvmrc` pinned to the exact floor (`22.13.0`). That satisfies all three
+constraints at once: bounded (no Vercel warning), not blocked locally (Node 24
+passes), and reproducible in CI. Verified: `npm ci` now emits **no** EBADENGINE
+warning on either Node 22 or Node 24.
+
+**2. `npm warn deprecated eslint@9.39.5`.** This one cannot be fixed today, and
+the investigation is worth recording.
+
+ESLint 9 is genuinely end-of-life — *every* 9.x release is deprecated, so no 9.x
+version avoids the warning. The only real fix is ESLint 10. That was attempted and
+failed on two independent blockers:
+
+```bash
+# Blocker 1 — FlatCompat is removed in ESLint 10 (eslintrc bridge is dead):
+TypeError: Converting circular structure to JSON
+    at ConfigValidator.formatErrors (.../@eslint/eslintrc/lib/shared/config-validator.js)
+
+# After rewriting to native flat config (import from eslint-config-next/core-web-vitals),
+# Blocker 2 — the React plugin calls an API ESLint 10 deleted:
+TypeError: Error while loading rule 'react/display-name':
+  contextOrFilename.getFilename is not a function
+```
+
+Blocker 2 is upstream and unresolvable at any version: `eslint-plugin-react`'s
+**latest** release (7.37.5 — also the exact copy bundled inside
+`eslint-config-next@16.3.6`) declares `eslint: "^3 || … || ^9.7"`. No published
+version of the React plugin supports ESLint 10.
+
+**Decision:** stay on `eslint@9.39.5` + `eslint-config-next@15.5.26`, which matches
+Next 15 and is the minimal correct posture. Linting works; CI is green. The
+warning is cosmetic and upstream-blocked.
+
+The upgrade was fully scoped during this session and is documented in the header
+comment of `eslint.config.mjs` so the next person does not have to rediscover it:
+
+1. bump `eslint` to 10.x;
+2. bump `eslint-config-next` to a release shipping native flat config (16+);
+3. replace `FlatCompat` with a direct spread of the `core-web-vitals` preset
+   (it already contains `next/typescript`, so the second extend is redundant);
+4. drop `@eslint/eslintrc`;
+5. **blocked until** `eslint-plugin-react` ships ESLint 10 support.
+
+Everything from the failed experiment was reverted, and the lockfile was restored
+from backup and re-validated with `npm ci`.
+
+**Bonus finding — `npm audit`.** Two advisories (1 moderate, 1 high) trace to
+`postcss <= 8.5.22` bundled **inside Next.js itself**. `npm audit fix --force`
+offers only `next@16.3.6`, a major upgrade out of scope here. Practical exposure
+is negligible: first-party CSS only, a build-time dependency, and a static export
+with no Node server or runtime PostCSS. Documented in the README rather than
+papered over.
+
+**Post-change verification:**
+
+```
+npm ci  → only the eslint deprecation warning; no EBADENGINE
+npm run verify → typecheck ✅  lint ✅  build ✅  (7/7 static pages, export OK)
+local Node 24.18.0 satisfies >=22.13.0 <25  ✅
 ```
 
 ---
