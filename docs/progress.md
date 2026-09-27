@@ -3,8 +3,9 @@
 > **Purpose.** A cold-start handoff document. A fresh session should be able to read
 > only this file and continue without re-discovering anything.
 >
-> **Last updated:** session 5 — resolved both Vercel install warnings. Site is
-> **complete and verified**; remaining items are content/brand decisions, not code.
+> **Last updated:** session 6 — the reported `./&` failure was from a stale deploy,
+> not from `HEAD`; guardrails added anyway. Site is **complete and verified**;
+> remaining items are content/brand decisions, not code.
 >
 > **Project root note:** the app was un-nested from `aglobal-care-web/` to the
 > repository root (`E:\code\Aglobal`). Paths below are root-relative.
@@ -32,8 +33,15 @@
 cd E:\code\Aglobal
 npm ci                 # exactly what CI and Vercel install
 npm run dev            # http://localhost:3000
-npm run verify         # typecheck + lint + build  ← use this before every handoff
+npm run verify         # preflight + typecheck + lint + build + CSS guard
+npm run preflight      # seconds: source scan + guard selftest
+npm run guard          # compiled-CSS scan (needs a build first)
 ```
+
+> **Deploying:** commit and push *before* triggering a Vercel deploy. A deploy
+> builds the pushed commit, never the local working tree — the session-6
+> confusion was exactly that. If a deploy fails, confirm the commit SHA Vercel
+> reports matches `git log -1`.
 
 ---
 
@@ -453,6 +461,92 @@ npm ci  → only the eslint deprecation warning; no EBADENGINE
 npm run verify → typecheck ✅  lint ✅  build ✅  (7/7 static pages, export OK)
 local Node 24.18.0 satisfies >=22.13.0 <25  ✅
 ```
+
+### Session 6 — the `./&` failure reappeared (it was a stale deploy)
+
+The reported Vercel log showed `engines: ">=20.9.0"` and referenced
+`chevron-down.svg` — **neither exists in `HEAD`**. Both were removed in `467d4ca`.
+
+```
+$ git log -1 --format='%h %ci %s'
+467d4ca 2026-09-27 13:44:57 +0800 Fixed errors.     ← the log's deploy predates this
+
+$ git show HEAD:package.json | grep node
+    "node": ">=22.13.0 <25"                          ← not >=20.9.0
+
+$ git show HEAD:src/app/globals.css | grep -c 'field-select'
+1                                                    ← the fix is committed
+
+$ git show HEAD:src/app/globals.css | grep -c "bg-\[url("
+0                                                    ← landmine absent
+```
+
+**Proof HEAD is clean.** Cloned the repo to a scratch dir and ran Vercel's exact
+sequence from the committed tree only — no working-tree files:
+
+```
+$ git clone --no-hardlinks . .tmp-clone && cd .tmp-clone
+$ npm ci && npm run build
+✓ Exporting (2/2)      ← builds successfully
+```
+
+**Conclusion:** that deployment built the older commit `f3239cf` (`Fixed linter
+errors.`) or one before it. The working tree was correct the whole time; the
+deploy was simply not built from it. **No source change was required.** If a
+future deploy still fails, check the commit SHA Vercel reports before touching
+code — and confirm the push actually landed on the branch being deployed.
+
+**Guardrails added anyway,** because the failure mode is genuinely easy to
+reintroduce and the user asked for enforcement.
+
+`scripts/check-css-urls.mjs` — one rule, three modes:
+
+| Mode | Timing | Input |
+| --- | --- | --- |
+| `source` | pre-build, no install needed | tracked sources (`src`, `docs`, `README.md`) |
+| `build` | post-build | compiled CSS in `out/_next/static/css` |
+| `selftest` | always | fixtures proving the rules fail on bad input |
+
+Replaces the inline bash in `ci.yml`. Two deliberate design choices:
+
+1. **Node, not bash.** `npm run verify` must work for local developers. On Windows
+   `bash` on `PATH` is a WSL stub that cannot see `E:\` paths, so a bash-based
+   guard would have broken the documented local workflow. Node behaves identically
+   everywhere and needs no dependency.
+2. **A self-test that asserts failure.** The first version of this check only
+   matched *quoted* `url()` paths and therefore passed the very build that was
+   failing. `selftest` requires a known-bad fixture to be rejected *and* a
+   known-good one accepted, so the rule cannot silently rot.
+
+`ci.yml` now runs two jobs: `guard` (seconds, skips the build when it trips) and
+`verify` (typecheck → lint → **Linux** build → compiled-CSS guard →
+export-asset check). `npm run verify` runs the same chain locally.
+
+**Guard proven to fail on real regressions** (not just on fixtures):
+
+```
+TEST 1 — injected a component using the offending arbitrary utility
+  FAIL — an arbitrary background-image utility appears in scanned source.
+    src\components\ui\__landmine.tsx:1: export const x = "bg-[url( ... )]"
+  [exit: 1]  ✅
+
+TEST 2 — appended url(/logo.png) to the compiled stylesheet
+  FAIL — compiled CSS references a repo asset via url():
+    /logo.png
+  [exit: 1]  ✅
+
+TEST 3 — restored state
+  RESULT: OK  [exit: 0]  ✅
+```
+
+**Important consequence:** `npm run verify` — which ran clean during session 4 —
+*would* have caught the original bug. The gap was that the fix had never been
+committed and pushed when that deploy was triggered, not that the check was
+missing.
+
+Also hardened: `.gitignore` now ignores `.tmp-*/` and `*.bak`. A scratch clone
+containing a nested `out/` was being picked up by eslint (6,674 problems) and
+would have been picked up by Tailwind's content scanner too.
 
 ---
 

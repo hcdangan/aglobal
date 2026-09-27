@@ -13,7 +13,9 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run lint && npm run build"
+    "preflight": "node scripts/check-css-urls.mjs source && node scripts/check-css-urls.mjs selftest",
+    "guard": "node scripts/check-css-urls.mjs build",
+    "verify": "npm run preflight && npm run typecheck && npm run lint && npm run build && npm run guard"
   },
   "dependencies": {
     "next": "15.5.26",

@@ -53,7 +53,13 @@ See [`.env.example`](./.env.example).
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+`.github/workflows/ci.yml` runs on every push and pull request.
+
+**Job 1 — `guard`** (seconds, no install). A fast source scan plus a self-test of
+the guard rules. Because it needs no dependencies, it fails in seconds and skips
+the expensive build job when it trips.
+
+**Job 2 — `verify`**:
 
 1. `npm ci` — installs strictly from `package-lock.json`, so CI resolves the same
    dependency tree as Vercel.
@@ -61,12 +67,38 @@ See [`.env.example`](./.env.example).
 3. `npm run lint`
 4. `npm run build` — the full static export, on Linux, which is where
    platform-specific build failures actually surface.
-5. A guard that scans the compiled CSS for `url()` references to repo assets.
-6. A check that the export contains the pages and assets Vercel will serve.
+5. `npm run guard` — scans the compiled CSS (see below).
+6. Export-asset check for the pages and directories Vercel will serve.
+
+Locally, `npm run verify` runs the same chain, so a green local run means a green
+deploy.
 
 > **Keep dependencies pinned to exact versions.** Tailwind and TypeScript use
 > ranges like `^4` / `^5`, which let a local green build turn into a red deploy.
 > If you upgrade, do it deliberately and let CI re-verify.
+
+### The CSS `url()` guard
+
+`scripts/check-css-urls.mjs` enforces one rule in two places:
+
+| Mode | When | What it reads |
+| --- | --- | --- |
+| `source` | before the build | tracked sources (`src`, `docs`, `README.md`) |
+| `build` | after the build | the compiled CSS in `out/_next/static/css` |
+| `selftest` | always | fixtures, proving the rules still fail on bad input |
+
+Run them directly with `npm run preflight`, `npm run guard`, or
+`node scripts/check-css-urls.mjs all`.
+
+It is written in Node rather than bash so it behaves identically on Windows,
+Linux and CI — `bash` on Windows usually resolves to a WSL stub that cannot see
+`E:\` paths, which would silently break `npm run verify` for local developers.
+
+**The guard has a self-test, and that matters.** A guard that cannot fail is worse
+than no guard: the first version of this check only matched *quoted* paths and
+therefore happily passed the very build that was failing. `selftest` asserts that
+a known-bad fixture is rejected *and* a known-good one is accepted, so the rule
+cannot silently rot.
 
 ## Troubleshooting
 

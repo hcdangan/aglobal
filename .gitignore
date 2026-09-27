@@ -40,3 +40,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# scratch dirs used during verification — never commit these. A nested `out/`
+# inside one would be picked up by eslint and by Tailwind's content scanner.
+.tmp-*/
+*.bak
